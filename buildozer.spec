@@ -19,7 +19,7 @@ source.include_exts = py,png,jpg,kv,atlas
 version = 1.0
 
 # Зависимости Python
-requirements = python3,kivy==2.3.0,vosk==0.3.45,sounddevice==0.4.6,openpyxl==3.1.2,sqlite3,pyjnius,android
+requirements = python3,kivy==2.3.0,pyjnius,android,openpyxl==3.1.2
 
 # Ориентация экрана
 orientation = portrait

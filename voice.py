@@ -1,64 +1,57 @@
-import os
-import queue
-import json
-import sounddevice as sd
-from vosk import Model, KaldiRecognizer
+import platform
 
-class VoiceRecognizer:
-    def __init__(self, model_path='vosk-model-small-ru-0.22'):
-        self.model_path = model_path
-        self.model = None
-        self.q = queue.Queue()
-        self.load_model()
-    
-    def load_model(self):
-        """Загрузка модели Vosk"""
-        if not os.path.exists(self.model_path):
-            raise FileNotFoundError(
-                f"Модель не найдена: {self.model_path}\n"
-                f"Скачайте с https://alphacephei.com/vosk/models"
-            )
-        
-        self.model = Model(self.model_path)
-    
-    def callback(self, indata, frames, time, status):
-        """Коллбэк для записи аудио"""
-        if status:
-            print(status)
-        self.q.put(bytes(indata))
-    
-    def listen(self, on_result, on_error, timeout=10):
-        """Слушать микрофон и распознать речь"""
-        try:
-            rec = KaldiRecognizer(self.model, 16000)
+if platform.system() == 'Android':
+    from jnius import autoclass, cast
+    from android.permissions import request_permissions, Permission
+    from android import activity
+
+    class VoiceRecognizer:
+        def __init__(self):
+            self.model_path = 'N/A'
+            self._callback = None
+
+        def listen(self, on_result, on_error, timeout=10):
+            self._callback = {'on_result': on_result, 'on_error': on_error}
             
-            with sd.RawInputStream(
-                samplerate=16000,
-                blocksize=8000,
-                dtype='int16',
-                channels=1,
-                callback=self.callback
-            ):
-                # Слушаем до таймаута или пустого результата
-                import time
-                start_time = time.time()
+            # Запрашиваем разрешение на микрофон
+            request_permissions([Permission.RECORD_AUDIO])
+            
+            try:
+                Intent = autoclass('android.content.Intent')
+                RecognizerIntent = autoclass('android.speech.RecognizerIntent')
+                PythonActivity = autoclass('org.kivy.android.PythonActivity')
                 
-                while time.time() - start_time < timeout:
-                    data = self.q.get()
-                    if rec.AcceptWaveform(data):
-                        result = json.loads(rec.Result())
-                        text = result.get('text', '').strip()
-                        if text:
-                            on_result(text)
-                            return
+                intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, 'ru-RU')
+                intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, True) # <-- ОФФЛАЙН РЕЖИМ
                 
-                # Финальный результат
-                final = json.loads(rec.FinalResult())
-                text = final.get('text', '').strip()
-                if text:
-                    on_result(text)
-                else:
-                    on_error('Ничего не распознано')
-        
-        except Exception as e:
-            on_error(str(e))
+                current_activity = cast('android.app.Activity', PythonActivity.mActivity)
+                
+                def on_activity_result(request_code, result_code, intent_data):
+                    if request_code == 100:
+                        if result_code == -1:  # RESULT_OK
+                            results = intent_data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                            if results and results.size() > 0:
+                                self._callback['on_result'](results.get(0))
+                            else:
+                                self._callback['on_error']('Ничего не распознано')
+                        else:
+                            self._callback['on_error']('Распознавание отменено')
+                        
+                        # Отписываемся от события после первого срабатывания
+                        activity.unbind(on_activity_result=on_activity_result)
+                        
+                activity.bind(on_activity_result=on_activity_result)
+                current_activity.startActivityForResult(intent, 100)
+                
+            except Exception as e:
+                self._callback['on_error'](f'Ошибка инициализации: {str(e)}')
+else:
+    # Заглушка для ПК (чтобы приложение не падало при тесте на компьютере)
+    class VoiceRecognizer:
+        def __init__(self):
+            self.model_path = 'N/A'
+            
+        def listen(self, on_result, on_error, timeout=10):
+            on_error("Голосовой ввод доступен только на Android. Используйте поле ручного ввода на ПК.")
